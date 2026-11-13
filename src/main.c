@@ -12,6 +12,10 @@
 #define MIN_JUMP_VELOCITY 300.0f
 #define JUMP_VELOCITY_INCREMENT 1500.0f
 #define MAX_JUMP_VELOCITY 1000.0f
+#define JUMP_BUFFER_TIME 0.15f
+#define COYOTE_TIME 0.12f
+#define AFTER_IMAGES_TIME 0.1f
+#define AFTER_IMAGES_COUNT 4
 
 typedef enum EntityType EntityType;
 enum EntityType {
@@ -28,6 +32,13 @@ enum EntityState {
   FALL,
   WALL_RIDE,
 };
+typedef struct AfterImage AfterImage;
+struct AfterImage {
+  Vector2 pos;
+  Vector2 hitbox;
+  EntityType type;
+  EntityState state;
+};
 
 typedef struct Entity Entity;
 struct Entity {
@@ -39,6 +50,8 @@ struct Entity {
   EntityType type;
   EntityState state;
   EntityState prev_state;
+  bool grounded;
+  AfterImage after_images[AFTER_IMAGES_COUNT];
 };
 
 static int LAST_ENTITY_ID = PLAYER_ID;
@@ -51,55 +64,76 @@ void addEntity(Entity *Entities, Entity entity) {
 }
 
 void input(Entity *entities, float dt) {
+  const float left_stick_dead_zone_x = 0.1f;
+  const float left_stick_dead_zone_y = 0.1f;
+  const float left_trigger_dead_zone = -0.9f;
+
+  int gamepad = 0;
+  float left_stick_x = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X);
+  float left_stick_y = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y);
+  float left_trigger =
+      GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_TRIGGER);
+
+  if (left_stick_x > -left_stick_dead_zone_x &&
+      left_stick_x < left_stick_dead_zone_x) {
+    left_stick_x = 0.0f;
+  }
+  if (left_stick_y > -left_stick_dead_zone_y &&
+      left_stick_y < left_stick_dead_zone_y) {
+    left_stick_y = 0.0f;
+  }
+  if (left_trigger < left_trigger_dead_zone) {
+    left_trigger = -1.0f;
+  }
+
   Entity *player = &entities[PLAYER_ID];
   player->velocity.x = 0;
-  if (IsKeyDown(KEY_A)) {
+  if (IsKeyDown(KEY_A) || left_stick_x < -0.25f) {
     player->velocity.x = -player->movement_speed;
   }
-  if (IsKeyDown(KEY_D)) {
+  if (IsKeyDown(KEY_D) || left_stick_x > 0.25f) {
     player->velocity.x = player->movement_speed;
   }
 
-  static bool space_pressed = false;
-  static float input_buffer_delay = 0.03f;
-  static float input_buffer_timer = 0.0f;
+  static float jump_buffer = 0.0f;
+  static float coyote = 0.0f;
 
-  if (IsKeyPressed(KEY_SPACE)) {
-    space_pressed = true;
+  bool jump_pressed =
+      IsKeyPressed(KEY_SPACE) ||
+      IsGamepadButtonPressed(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+  bool jump_down = IsKeyDown(KEY_SPACE) ||
+                   IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+  bool jump_released =
+      IsKeyReleased(KEY_SPACE) ||
+      IsGamepadButtonReleased(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+  if (jump_down && player->grounded) {
+    jump_pressed = true;
   }
-  if (space_pressed) {
-    input_buffer_timer += dt;
-    if (input_buffer_timer > input_buffer_delay) {
-      input_buffer_timer = 0.0f;
-      space_pressed = false;
+
+  if (jump_pressed) {
+    jump_buffer = JUMP_BUFFER_TIME;
+  } else {
+    jump_buffer -= dt;
+  }
+
+  if (player->grounded) {
+    coyote = COYOTE_TIME;
+  } else {
+    coyote -= dt;
+  }
+
+  if (jump_buffer > 0.0f && coyote > 0.0f) {
+    if (jump_down) {
+      player->velocity.y = -MAX_JUMP_VELOCITY;
+    } else {
+      player->velocity.y = -MIN_JUMP_VELOCITY;
     }
+    player->grounded = false;
+    jump_buffer = 0.0f;
+    coyote = 0.0f;
   }
 
-  static bool cyote = false;
-  static float cyote_buffer_delay = 0.1f;
-  static float cyote_buffer_timer = 0.0f;
-
-  if (player->state == FALL &&
-      (player->prev_state == RUN || player->prev_state == IDLE)) {
-    cyote = true;
-  }
-
-  if (cyote) {
-    cyote_buffer_timer += dt;
-    if (cyote_buffer_timer > cyote_buffer_delay) {
-      cyote_buffer_timer = 0.0f;
-      cyote = false;
-    }
-  }
-
-  if (space_pressed && player->state != JUMP &&
-      (player->state != FALL || cyote)) {
-    player->velocity.y = -MAX_JUMP_VELOCITY;
-    space_pressed = false;
-    cyote = false;
-  }
-  if (IsKeyReleased(KEY_SPACE) && player->velocity.y < -MIN_JUMP_VELOCITY &&
-      player->state == JUMP) {
+  if (jump_released && player->velocity.y < -MIN_JUMP_VELOCITY) {
     player->velocity.y = -MIN_JUMP_VELOCITY;
   }
 
@@ -128,16 +162,18 @@ void updatePosition(Entity *entities, float dt) {
           .y = entities[i].pos.y + entities[i].velocity.y * dt,
       };
 
-      if (entities[i].velocity.x > 0 || entities[i].velocity.x < 0) {
+      if (entities[i].prev_pos.x != entities[i].pos.x && entities[i].grounded) {
         entities[i].prev_state = entities[i].state;
         entities[i].state = RUN;
       }
       if (entities[i].prev_pos.y > entities[i].pos.y) {
+        entities[i].grounded = false;
         entities[i].prev_state = entities[i].state;
         entities[i].state = JUMP;
       }
       if (entities[i].prev_pos.y < entities[i].pos.y) {
         entities[i].prev_state = entities[i].state;
+        entities[i].grounded = false;
         entities[i].state = FALL;
       }
       if (entities[i].prev_pos.x == entities[i].pos.x &&
@@ -190,8 +226,7 @@ void updatePosition(Entity *entities, float dt) {
             if (entities[i].velocity.y > 0) {
               new_pos.y = entities[j].pos.y - entities[j].hitbox.y / 2.0f -
                           entities[i].hitbox.y / 2.0f;
-              entities[i].prev_state = entities[i].state;
-              entities[i].state = IDLE;
+              entities[i].grounded = true;
             } else if (entities[i].velocity.y < 0) {
               new_pos.y = entities[j].pos.y + entities[j].hitbox.y / 2.0f +
                           entities[i].hitbox.y / 2.0f;
@@ -213,9 +248,28 @@ void updatePosition(Entity *entities, float dt) {
   }
 }
 
+void updateAfterImages(Entity *entities, float dt) {
+  Entity *player = &entities[PLAYER_ID];
+  static float after_images_timer = 0.0f;
+  after_images_timer += dt;
+  if (after_images_timer >= AFTER_IMAGES_TIME) {
+    after_images_timer = after_images_timer - AFTER_IMAGES_TIME;
+    AfterImage after_image = {0};
+    after_image.pos = player->pos;
+    after_image.hitbox = player->hitbox;
+    after_image.type = player->type;
+    after_image.state = player->state;
+    for (int i = 0; i < AFTER_IMAGES_COUNT - 1; i++) {
+      player->after_images[i] = player->after_images[i + 1];
+    }
+    player->after_images[AFTER_IMAGES_COUNT - 1] = after_image;
+  }
+}
+
 void physics(Entity *entities, float dt) {
   gravity(entities, dt);
   updatePosition(entities, dt);
+  updateAfterImages(entities, dt);
 }
 
 void drawDebug(Entity *entities) {
@@ -257,17 +311,31 @@ void drawDebug(Entity *entities) {
     snprintf(buffer, sizeof(buffer), "PLAYER STATE: WALL_RIDE");
   } break;
   }
+  // printf("%s\n", buffer);
   DrawText(buffer, 2, 2 + 3 * font_size, font_size, WHITE);
 }
 
 void drawPlayer(Entity player) {
-  Rectangle rect = {
+  for (int i = 0; i < AFTER_IMAGES_COUNT; i++) {
+    Rectangle after_image_rect = {
+        .x = player.after_images[i].pos.x -
+             player.after_images[i].hitbox.x / 2.0f,
+        .y = player.after_images[i].pos.y -
+             player.after_images[i].hitbox.y / 2.0f,
+        .width = player.after_images[i].hitbox.x,
+        .height = player.after_images[i].hitbox.y,
+    };
+    float t = (float)i / AFTER_IMAGES_COUNT; // 1.0, 0.75, 0.5, 0.25
+    Color after_image_color = {135, 60, 190, (unsigned char)(255 * t)};
+    DrawRectangleLinesEx(after_image_rect, 2.0f, after_image_color);
+  }
+  Rectangle player_rect = {
       .x = player.pos.x - player.hitbox.x / 2.0f,
       .y = player.pos.y - player.hitbox.y / 2.0f,
       .width = player.hitbox.x,
       .height = player.hitbox.y,
   };
-  DrawRectangleLinesEx(rect, 2.0f, BLUE);
+  DrawRectangleLinesEx(player_rect, 2.0f, BLUE);
 }
 
 void drawPlatform(Entity platform) {
@@ -352,7 +420,7 @@ int main() {
 
   Entity floating_platform = {0};
   floating_platform.pos.x = WINDOW_WIDTH / 2.0f;
-  floating_platform.pos.y = WINDOW_HEIGHT / 2.0f;
+  floating_platform.pos.y = WINDOW_HEIGHT * 2.0f / 3.0f;
   floating_platform.hitbox.x = 80.0f;
   floating_platform.hitbox.y = 80.0f;
   floating_platform.type = PLATFORM;
