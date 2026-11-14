@@ -16,11 +16,22 @@
 #define COYOTE_TIME 0.12f
 #define AFTER_IMAGES_TIME 0.1f
 #define AFTER_IMAGES_COUNT 4
+#define AFTER_IMAGES_TOTAL_TIME 0.2f
+#define DASH_TIMER 0.2f
+#define DASH_VELOCITY 2000.0f
 
 typedef enum EntityType EntityType;
 enum EntityType {
   PLAYER,
   PLATFORM,
+};
+
+typedef enum EntityDirection EntityDirection;
+enum EntityDirection {
+  LEFT,
+  RIGHT,
+  UP,
+  DOWN,
 };
 
 typedef enum EntityState EntityState;
@@ -32,6 +43,7 @@ enum EntityState {
   FALL,
   WALL_RIDE,
 };
+
 typedef struct AfterImage AfterImage;
 struct AfterImage {
   Vector2 pos;
@@ -48,6 +60,7 @@ struct Entity {
   Vector2 hitbox;
   float movement_speed;
   EntityType type;
+  EntityDirection direction;
   EntityState state;
   EntityState prev_state;
   bool grounded;
@@ -87,54 +100,103 @@ void input(Entity *entities, float dt) {
   }
 
   Entity *player = &entities[PLAYER_ID];
-  player->velocity.x = 0;
-  if (IsKeyDown(KEY_A) || left_stick_x < -0.25f) {
-    player->velocity.x = -player->movement_speed;
-  }
-  if (IsKeyDown(KEY_D) || left_stick_x > 0.25f) {
-    player->velocity.x = player->movement_speed;
-  }
 
-  static float jump_buffer = 0.0f;
-  static float coyote = 0.0f;
+  static float dash = DASH_TIMER;
+  if ((IsKeyPressed(KEY_LEFT_SHIFT) ||
+       IsGamepadButtonPressed(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT)) &&
+      player->state != DASH) {
+    player->prev_state = player->state;
+    player->state = DASH;
 
-  bool jump_pressed =
-      IsKeyPressed(KEY_SPACE) ||
-      IsGamepadButtonPressed(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
-  bool jump_down = IsKeyDown(KEY_SPACE) ||
-                   IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
-  bool jump_released =
-      IsKeyReleased(KEY_SPACE) ||
-      IsGamepadButtonReleased(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
-  if (jump_down && player->grounded) {
-    jump_pressed = true;
-  }
-
-  if (jump_pressed) {
-    jump_buffer = JUMP_BUFFER_TIME;
-  } else {
-    jump_buffer -= dt;
-  }
-
-  if (player->grounded) {
-    coyote = COYOTE_TIME;
-  } else {
-    coyote -= dt;
+    switch (player->direction) {
+    case LEFT: {
+      player->velocity.x = -DASH_VELOCITY;
+      player->velocity.y = 0;
+    } break;
+    case RIGHT: {
+      player->velocity.x = DASH_VELOCITY;
+      player->velocity.y = 0;
+    } break;
+    case UP: {
+      player->velocity.x = 0;
+      player->velocity.y = -DASH_VELOCITY;
+    } break;
+    case DOWN: {
+      player->velocity.x = 0;
+      player->velocity.y = DASH_VELOCITY;
+    } break;
+    }
   }
 
-  if (jump_buffer > 0.0f && coyote > 0.0f) {
-    if (jump_down) {
-      player->velocity.y = -MAX_JUMP_VELOCITY;
+  if (player->state == DASH) {
+    dash -= dt;
+  }
+  if (dash <= 0) {
+    player->state = player->prev_state;
+    player->prev_state = DASH;
+  }
+
+  if (player->state != DASH) {
+    dash = DASH_TIMER;
+    player->velocity.x = 0;
+    if (IsKeyDown(KEY_A) || left_stick_x < -0.25f) {
+      player->velocity.x = -player->movement_speed;
+      player->direction = LEFT;
+    }
+    if (IsKeyDown(KEY_D) || left_stick_x > 0.25f) {
+      player->velocity.x = player->movement_speed;
+      player->direction = RIGHT;
+    }
+
+    if (IsKeyDown(KEY_W)) {
+      player->direction = UP;
+    }
+    if (IsKeyDown(KEY_S)) {
+      player->direction = DOWN;
+    }
+
+    static float jump_buffer = 0.0f;
+    static float coyote = 0.0f;
+
+    bool jump_pressed =
+        IsKeyPressed(KEY_SPACE) ||
+        IsGamepadButtonPressed(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+    bool jump_down =
+        IsKeyDown(KEY_SPACE) ||
+        IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+    bool jump_released =
+        IsKeyReleased(KEY_SPACE) ||
+        IsGamepadButtonReleased(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+    if (jump_down && player->grounded) {
+      jump_pressed = true;
+    }
+
+    if (jump_pressed) {
+      jump_buffer = JUMP_BUFFER_TIME;
     } else {
+      jump_buffer -= dt;
+    }
+
+    if (player->grounded) {
+      coyote = COYOTE_TIME;
+    } else {
+      coyote -= dt;
+    }
+
+    if (jump_buffer > 0.0f && coyote > 0.0f) {
+      if (jump_down) {
+        player->velocity.y = -MAX_JUMP_VELOCITY;
+      } else {
+        player->velocity.y = -MIN_JUMP_VELOCITY;
+      }
+      player->grounded = false;
+      jump_buffer = 0.0f;
+      coyote = 0.0f;
+    }
+
+    if (jump_released && player->velocity.y < -MIN_JUMP_VELOCITY) {
       player->velocity.y = -MIN_JUMP_VELOCITY;
     }
-    player->grounded = false;
-    jump_buffer = 0.0f;
-    coyote = 0.0f;
-  }
-
-  if (jump_released && player->velocity.y < -MIN_JUMP_VELOCITY) {
-    player->velocity.y = -MIN_JUMP_VELOCITY;
   }
 
   if (IsKeyPressed(KEY_F1)) {
@@ -162,24 +224,28 @@ void updatePosition(Entity *entities, float dt) {
           .y = entities[i].pos.y + entities[i].velocity.y * dt,
       };
 
-      if (entities[i].prev_pos.x != entities[i].pos.x && entities[i].grounded) {
-        entities[i].prev_state = entities[i].state;
-        entities[i].state = RUN;
-      }
-      if (entities[i].prev_pos.y > entities[i].pos.y) {
-        entities[i].grounded = false;
-        entities[i].prev_state = entities[i].state;
-        entities[i].state = JUMP;
-      }
-      if (entities[i].prev_pos.y < entities[i].pos.y) {
-        entities[i].prev_state = entities[i].state;
-        entities[i].grounded = false;
-        entities[i].state = FALL;
-      }
-      if (entities[i].prev_pos.x == entities[i].pos.x &&
-          entities[i].prev_pos.y == entities[i].pos.y) {
-        entities[i].prev_state = entities[i].state;
-        entities[i].state = IDLE;
+      if (entities[i].state != DASH) {
+
+        if (entities[i].prev_pos.x != entities[i].pos.x &&
+            entities[i].grounded) {
+          entities[i].prev_state = entities[i].state;
+          entities[i].state = RUN;
+        }
+        if (entities[i].prev_pos.y > entities[i].pos.y) {
+          entities[i].grounded = false;
+          entities[i].prev_state = entities[i].state;
+          entities[i].state = JUMP;
+        }
+        if (entities[i].prev_pos.y < entities[i].pos.y) {
+          entities[i].prev_state = entities[i].state;
+          entities[i].grounded = false;
+          entities[i].state = FALL;
+        }
+        if (entities[i].prev_pos.x == entities[i].pos.x &&
+            entities[i].prev_pos.y == entities[i].pos.y) {
+          entities[i].prev_state = entities[i].state;
+          entities[i].state = IDLE;
+        }
       }
 
       Rectangle entity_rect1 = {
@@ -267,7 +333,9 @@ void updateAfterImages(Entity *entities, float dt) {
 }
 
 void physics(Entity *entities, float dt) {
-  gravity(entities, dt);
+  if (entities[PLAYER_ID].state != DASH) {
+    gravity(entities, dt);
+  }
   updatePosition(entities, dt);
   updateAfterImages(entities, dt);
 }
@@ -313,22 +381,37 @@ void drawDebug(Entity *entities) {
   }
   // printf("%s\n", buffer);
   DrawText(buffer, 2, 2 + 3 * font_size, font_size, WHITE);
+
+  if (player.direction == LEFT) {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: LEFT");
+  } else {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: RIGHT");
+  }
+  DrawText(buffer, 2, 2 + 4 * font_size, font_size, WHITE);
 }
 
-void drawPlayer(Entity player) {
-  for (int i = 0; i < AFTER_IMAGES_COUNT; i++) {
-    Rectangle after_image_rect = {
-        .x = player.after_images[i].pos.x -
-             player.after_images[i].hitbox.x / 2.0f,
-        .y = player.after_images[i].pos.y -
-             player.after_images[i].hitbox.y / 2.0f,
-        .width = player.after_images[i].hitbox.x,
-        .height = player.after_images[i].hitbox.y,
-    };
-    float t = (float)i / AFTER_IMAGES_COUNT; // 1.0, 0.75, 0.5, 0.25
-    Color after_image_color = {135, 60, 190, (unsigned char)(255 * t)};
-    DrawRectangleLinesEx(after_image_rect, 2.0f, after_image_color);
+void drawPlayer(Entity player, float dt) {
+  static float after_image_timer = 0.0f;
+  if (player.state == DASH) {
+    after_image_timer = AFTER_IMAGES_TOTAL_TIME;
   }
+  after_image_timer -= dt;
+  if (after_image_timer > 0.0f) {
+    for (int i = 0; i < AFTER_IMAGES_COUNT; i++) {
+      Rectangle after_image_rect = {
+          .x = player.after_images[i].pos.x -
+               player.after_images[i].hitbox.x / 2.0f,
+          .y = player.after_images[i].pos.y -
+               player.after_images[i].hitbox.y / 2.0f,
+          .width = player.after_images[i].hitbox.x,
+          .height = player.after_images[i].hitbox.y,
+      };
+      float t = (float)i / AFTER_IMAGES_COUNT; // 1.0, 0.75, 0.5, 0.25
+      Color after_image_color = {135, 60, 190, (unsigned char)(255 * t)};
+      DrawRectangleLinesEx(after_image_rect, 2.0f, after_image_color);
+    }
+  }
+
   Rectangle player_rect = {
       .x = player.pos.x - player.hitbox.x / 2.0f,
       .y = player.pos.y - player.hitbox.y / 2.0f,
@@ -348,14 +431,14 @@ void drawPlatform(Entity platform) {
   DrawRectangleLinesEx(rect, 2.0f, WHITE);
 }
 
-void drawEntities(Entity *entities) {
+void drawEntities(Entity *entities, float dt) {
   if (DEBUG) {
     drawDebug(entities);
   }
   for (int i = 1; i < LAST_ENTITY_ID; i++) {
     switch (entities[i].type) {
     case PLAYER: {
-      drawPlayer(entities[i]);
+      drawPlayer(entities[i], dt);
     } break;
     case PLATFORM: {
       drawPlatform(entities[i]);
@@ -364,10 +447,10 @@ void drawEntities(Entity *entities) {
   }
 }
 
-void render(Entity *entities) {
+void render(Entity *entities, float dt) {
   BeginDrawing();
   ClearBackground(BLACK);
-  drawEntities(entities);
+  drawEntities(entities, dt);
   EndDrawing();
 }
 
@@ -383,6 +466,7 @@ int main() {
   player.hitbox.y = 32.0f;
   player.movement_speed = 300.0f;
   player.type = PLAYER;
+  player.direction = RIGHT;
   player.state = IDLE;
   addEntity(entities, player);
 
@@ -431,7 +515,7 @@ int main() {
     dt = GetFrameTime();
     input(entities, dt);
     physics(entities, dt);
-    render(entities);
+    render(entities, dt);
   }
   CloseWindow();
   return 0;
