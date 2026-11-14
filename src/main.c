@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <raylib.h>
+#include <raymath.h>
 #include <stdio.h>
 
 #define SCALE 50
@@ -18,7 +19,9 @@
 #define AFTER_IMAGES_COUNT 4
 #define AFTER_IMAGES_TOTAL_TIME 0.2f
 #define DASH_TIMER 0.2f
-#define DASH_VELOCITY 2000.0f
+#define HORIZONTAL_DASH_VELOCITY 1000.0f
+#define VERTICAL_DASH_VELOCITY 750.0f
+#define SQRT_TWO 1.141f
 
 typedef enum EntityType EntityType;
 enum EntityType {
@@ -32,6 +35,10 @@ enum EntityDirection {
   RIGHT,
   UP,
   DOWN,
+  LEFTUP,
+  LEFTDOWN,
+  RIGHTUP,
+  RIGHTDOWN,
 };
 
 typedef enum EntityState EntityState;
@@ -108,23 +115,42 @@ void input(Entity *entities, float dt) {
     player->prev_state = player->state;
     player->state = DASH;
 
+    Vector2 dir = {0};
     switch (player->direction) {
     case LEFT: {
-      player->velocity.x = -DASH_VELOCITY;
-      player->velocity.y = 0;
+      dir.x -= 1;
     } break;
     case RIGHT: {
-      player->velocity.x = DASH_VELOCITY;
-      player->velocity.y = 0;
+      dir.x += 1;
     } break;
     case UP: {
-      player->velocity.x = 0;
-      player->velocity.y = -DASH_VELOCITY;
+      dir.y -= 1;
     } break;
     case DOWN: {
-      player->velocity.x = 0;
-      player->velocity.y = DASH_VELOCITY;
+      dir.y += 1;
     } break;
+    case LEFTUP: {
+      dir.x -= 1;
+      dir.y -= 1;
+    } break;
+    case LEFTDOWN: {
+      dir.x -= 1;
+      dir.y += 1;
+    } break;
+    case RIGHTUP: {
+      dir.x += 1;
+      dir.y -= 1;
+    } break;
+    case RIGHTDOWN: {
+      dir.x += 1;
+      dir.y += 1;
+    } break;
+    }
+
+    if (dir.x != 0 || dir.y != 0) {
+      dir = Vector2Normalize(dir);
+      player->velocity.x = dir.x * HORIZONTAL_DASH_VELOCITY;
+      player->velocity.y = dir.y * VERTICAL_DASH_VELOCITY;
     }
   }
 
@@ -147,12 +173,23 @@ void input(Entity *entities, float dt) {
       player->velocity.x = player->movement_speed;
       player->direction = RIGHT;
     }
-
     if (IsKeyDown(KEY_W)) {
       player->direction = UP;
     }
     if (IsKeyDown(KEY_S)) {
       player->direction = DOWN;
+    }
+    if (IsKeyDown(KEY_A) && IsKeyDown(KEY_W)) {
+      player->direction = LEFTUP;
+    }
+    if (IsKeyDown(KEY_A) && IsKeyDown(KEY_S)) {
+      player->direction = LEFTDOWN;
+    }
+    if (IsKeyDown(KEY_D) && IsKeyDown(KEY_W)) {
+      player->direction = RIGHTUP;
+    }
+    if (IsKeyDown(KEY_D) && IsKeyDown(KEY_S)) {
+      player->direction = RIGHTDOWN;
     }
 
     static float jump_buffer = 0.0f;
@@ -382,11 +419,33 @@ void drawDebug(Entity *entities) {
   // printf("%s\n", buffer);
   DrawText(buffer, 2, 2 + 3 * font_size, font_size, WHITE);
 
-  if (player.direction == LEFT) {
+  switch (player.direction) {
+  case LEFT: {
     snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: LEFT");
-  } else {
+  } break;
+  case RIGHT: {
     snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: RIGHT");
+  } break;
+  case UP: {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: UP");
+  } break;
+  case DOWN: {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: DOWN");
+  } break;
+  case LEFTUP: {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: LEFTUP");
+  } break;
+  case LEFTDOWN: {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: LEFTDOWN");
+  } break;
+  case RIGHTUP: {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: RIGHTUP");
+  } break;
+  case RIGHTDOWN: {
+    snprintf(buffer, sizeof(buffer), "PLAYER DIRECTION: RIGHTDOWN");
+  } break;
   }
+
   DrawText(buffer, 2, 2 + 4 * font_size, font_size, WHITE);
 }
 
